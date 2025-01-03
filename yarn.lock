@@ -9,6 +9,11 @@
   dependencies:
     undici-types "~6.20.0"
 
+clipargs@^3.1.1:
+  version "3.1.1"
+  resolved "https://registry.yarnpkg.com/clipargs/-/clipargs-3.1.1.tgz#7a201f5f4111943ef7fb241509977998ecf7fb55"
+  integrity sha512-WCUNMrAbo6HwYIh64+CwLlH3zoGke2I70agwV98T3H91anIxxIWT9wcbhaouax1lW/AUl8qs/KWpukgkWf2hfg==
+
 dotenv@^16.4.7:
   version "16.4.7"
   resolved "https://registry.yarnpkg.com/dotenv/-/dotenv-16.4.7.tgz#0e20c5b82950140aa99be360a8a5f52335f53c26"
