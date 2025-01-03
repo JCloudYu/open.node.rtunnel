@@ -1,0 +1,11 @@
+.DS_Store
+Thumbs.db
+
+.vscode
+.idea
+
+node_modules
+_certs
+
+.env.local
+.env.prod

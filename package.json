@@ -1,0 +1,9 @@
+{
+	"dependencies": {
+		"dotenv": "^16.4.7",
+		"ws": "^8.18.0"
+	},
+	"devDependencies": {
+		"@types/node": "^22.10.5"
+	}
+}
