@@ -1,8 +1,10 @@
+import https from "https";
+import fs from "fs";
+
+import dotenv from "dotenv";
 import {WebSocketServer, WebSocket} from "ws";
 import {createServer, Socket} from "net";
-import * as https from "https";
-import * as fs from "fs";
-import * as dotenv from "dotenv";
+
 
 // 加載環境變數
 dotenv.config({

@@ -1,7 +1,8 @@
+import fs from "fs";
+import {createConnection, Socket} from "net";
+
+import dotenv from "dotenv";
 import WebSocket from "ws";
-import * as fs from "fs";
-import * as dotenv from "dotenv";
-import { createConnection, Socket } from "net";
 
 // 加載環境變數
 dotenv.config({
