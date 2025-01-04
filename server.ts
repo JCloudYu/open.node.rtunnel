@@ -37,14 +37,28 @@ if (!fs.existsSync(authorizedClientsPath)) {
 }
 
 // Watch for changes in the authorized clients file
-fs.watch(authorizedClientsPath, (eventType) => {
-	if (eventType === 'change') {
-		console.log(`Authorized clients file changed. Reloading...`);
-		loadAuthorizedClients();
+let currentWatch: fs.FSWatcher | null = null;
+
+function watchAuthorizedClients() {
+	if (currentWatch) {
+		currentWatch.close();
 	}
-});
+
+	currentWatch = fs.watch(authorizedClientsPath, (eventType, filename) => {
+		if (eventType === 'change') {
+			console.log(`Authorized clients file changed. Reloading...`);
+			loadAuthorizedClients();
+		} else if (eventType === 'rename') {
+			console.log(`File renamed. Watching new file: ${filename}`);
+			setTimeout(()=>{
+				watchAuthorizedClients(); // Start watching the new file
+			}, 1000);
+		}
+	});
+}
 
 // Initial load of authorized clients
+watchAuthorizedClients();
 loadAuthorizedClients();
 
 
