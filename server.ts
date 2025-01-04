@@ -1,6 +1,7 @@
 import https from "https";
 import fs from "fs";
 import net from "net";
+import crypto from 'crypto';
 
 import dotenv from "dotenv";
 import {WebSocketServer, WebSocket} from "ws";
@@ -15,7 +16,45 @@ dotenv.config({
 
 const controlHost = process.env.CONTROL_HOST || "127.0.0.1";
 const controlPort = parseInt(process.env.CONTROL_PORT || "8000", 10);
-const verifyClientCert = parseInt(process.env.VERIFY_CLIENT_CERT || "1", 10) !== 0;
+const authorizedClientsPath = process.env.AUTHORIZED_CLIENTS || '';
+const authorizedClients: string[] = [];
+
+// Function to load authorized clients from the file
+function loadAuthorizedClients() {
+	try {
+		const data = fs.readFileSync(authorizedClientsPath, 'utf-8');
+		authorizedClients.splice(0, authorizedClients.length, ...data.split('\n').filter(line => line.trim() !== ''));
+		console.log(`Authorized clients updated: ${authorizedClients}`);
+	}
+	catch (err) {
+		console.error(`Error reading authorized clients file: ${err.message}`);
+	}
+}
+
+if (!fs.existsSync(authorizedClientsPath)) {
+	fs.writeFileSync(authorizedClientsPath, '', 'utf-8');
+	console.log(`Authorized clients not found, created empty file: ${authorizedClientsPath}`);
+}
+
+// Watch for changes in the authorized clients file
+fs.watch(authorizedClientsPath, (eventType) => {
+	if (eventType === 'change') {
+		console.log(`Authorized clients file changed. Reloading...`);
+		loadAuthorizedClients();
+	}
+});
+
+// Initial load of authorized clients
+loadAuthorizedClients();
+
+
+
+const SERVER_KEY_PATH = process.env.SERVER_KEY_PATH;
+const SERVER_CERT_PATH = process.env.SERVER_CERT_PATH;
+if ( !SERVER_KEY_PATH || !SERVER_CERT_PATH ) {
+	console.error("SERVER_KEY_PATH or SERVER_CERT_PATH is not set.");
+	process.exit(1);
+}
 
 const MAX_BUFFER_SIZE = 1 * 1024 * 1024; // 1 MB
 const PING_INTERVAL = 5000; // 每 5 秒發送一次 ping
@@ -27,7 +66,6 @@ const activeServers = new Map<string, {
 	clients: Set<WebSocket>;
 }>();
 
-// 移除 currentClient 全局變量，改用 Map 追蹤所有客戶端
 const clients = new Map<WebSocket, {
 	links: Map<number, { socket: Socket; buffer: Buffer[]; confirmed: boolean; bufferSize: number }>;
 	pingTimeout?: NodeJS.Timeout;
@@ -39,11 +77,10 @@ const activeLinkIds: Set<number> = new Set();
 
 // TLS options for server
 const tlsOptions: https.ServerOptions = {
-	key: fs.readFileSync(process.env.SERVER_KEY_PATH || "./server-key.pem"),
-	cert: fs.readFileSync(process.env.SERVER_CERT_PATH || "./server-root-cert.pem"),
-	ca: process.env.SERVER_CA_CERT_PATH ? fs.readFileSync(process.env.SERVER_CA_CERT_PATH) : undefined,
-	requestCert: verifyClientCert,
-	rejectUnauthorized: verifyClientCert,
+	key: fs.readFileSync(SERVER_KEY_PATH),
+	cert: fs.readFileSync(SERVER_CERT_PATH),
+	requestCert: true,
+	rejectUnauthorized: false,
 };
 
 // HTTPS server for TLS
@@ -64,7 +101,7 @@ function encodeMessage(type: number, linkId: number, content: Buffer = Buffer.al
 function decodeMessage(buffer: Buffer): { type: number; linkId: number; content: Buffer } {
 	const type = buffer.readUInt32BE(0);
 	const linkId = buffer.readUInt32BE(4);
-	const content = buffer.slice(8);
+	const content = buffer.subarray(8);
 
 	return { type, linkId, content };
 }
@@ -82,7 +119,7 @@ function generateUniqueLinkId(): number {
 function heartbeat(ws: WebSocket) {
 	const client = clients.get(ws);
 	if (!client) return;
-	
+
 	client.isAlive = true;
 
 	if (client.pingTimeout) {
@@ -91,7 +128,7 @@ function heartbeat(ws: WebSocket) {
 
 	client.pingTimeout = setTimeout(() => {
 		console.log("Client ping timeout, terminating connection");
-			ws.terminate();
+		ws.terminate();
 	}, PING_TIMEOUT);
 }
 
@@ -116,18 +153,34 @@ setInterval(() => {
 	}
 }, PING_INTERVAL);
 
+function isWhitelisted(publicKey: Buffer): boolean {
+	const publicKeyHash = crypto.createHash('sha1').update(publicKey).digest('hex');
+	return authorizedClients.includes(publicKeyHash);
+}
+
 controlServer.on("connection", (ws, req) => {
-	if (verifyClientCert) {
-		const cert = req.socket.getPeerCertificate();
-		if (!cert) {
-			console.log("No client certificate provided. Connection rejected.");
-			ws.close(1001, "Client certificate required.");
-			return;
-		}
+	const cert = req.socket.getPeerCertificate();
+	if (!cert) {
+		console.log("No client certificate provided. Connection rejected.");
+		ws.close(1001, "Client certificate required.");
+		return;
+	}
+
+	const publicKey = cert.pubkey;
+	if (!publicKey) {
+		console.log('Connection rejected: No public key provided');
+		ws.close(1001, "Client certificate required.");
+		return;
+	}
+
+	if (!isWhitelisted(publicKey)) {
+		console.log('Connection rejected: Public key not whitelisted');
+		ws.close(1001, "Client certificate not whitelisted.");
+		return;
 	}
 
 	console.log(`Client connected: ${req.socket.remoteAddress}`);
-	
+
 	// 將新客戶端加入 clients Map
 	clients.set(ws, {
 		links: new Map(),
@@ -142,7 +195,7 @@ controlServer.on("connection", (ws, req) => {
 	ws.on("close", () => {
 		console.log("Client disconnected.");
 		const client = clients.get(ws);
-		
+
 		if (client?.pingTimeout) {
 			clearTimeout(client.pingTimeout);
 		}
@@ -193,7 +246,7 @@ function handleControlData(ws: WebSocket, message: Buffer): void {
 			// 如果服務器已存在，將當前客戶端加入到客戶端列表中
 			existingServer.clients.add(ws);
 			client.boundServers.add(serverKey);
-			
+
 			// 發送綁定成功響應
 			ws.send(encodeMessage(11, linkId, Buffer.from(JSON.stringify({
 				success: true
@@ -251,7 +304,7 @@ function handleControlData(ws: WebSocket, message: Buffer): void {
 				clients: new Set([ws])
 			});
 			client.boundServers.add(serverKey);
-			
+
 			ws.send(encodeMessage(11, linkId, Buffer.from(JSON.stringify({
 				success: true
 			}))));
@@ -268,7 +321,7 @@ function handleControlData(ws: WebSocket, message: Buffer): void {
 		const link = client.links.get(linkId);
 		if (link) {
 			console.log(`Link ready confirmed for link_id=${linkId}`);
-				link.confirmed = true;
+			link.confirmed = true;
 
 			link.buffer.forEach((chunk) => {
 				ws.send(encodeMessage(2, linkId, chunk));

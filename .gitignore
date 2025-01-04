@@ -6,6 +6,7 @@ Thumbs.db
 
 node_modules
 _certs
+authorized_clients.txt
 
 .env.local
 .env.prod
