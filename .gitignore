@@ -5,7 +5,7 @@ Thumbs.db
 .idea
 
 node_modules
-_certs
+_env
 authorized_clients.txt
 
 .env.local
