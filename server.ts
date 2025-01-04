@@ -24,7 +24,7 @@ function loadAuthorizedClients() {
 	try {
 		const data = fs.readFileSync(authorizedClientsPath, 'utf-8');
 		authorizedClients.splice(0, authorizedClients.length, ...data.split('\n').map(line => line.split(' ')[0]).filter(hash => hash.trim() !== ''));
-		console.log(`Authorized clients updated: ${authorizedClients}`);
+		console.log(`Authorized clients updated: ${authorizedClients.map(h=>`    ${h}`)}`);
 	}
 	catch (err) {
 		console.error(`Error reading authorized clients file: ${err.message}`);
