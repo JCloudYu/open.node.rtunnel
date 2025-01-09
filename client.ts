@@ -67,6 +67,7 @@ if (isNaN(bindPort) || isNaN(localPort)) {
 
 let controlSocket: WebSocket | null = null;
 const links: Map<number, Socket> = new Map();
+let lastPingTime: number = Date.now(); // Track the last ping time
 
 // 封包處理：將類型、link_id 和內容編碼為二進制
 function encodeMessage(type: number, linkId: number, content: Buffer = Buffer.alloc(0)): Buffer {
@@ -141,7 +142,10 @@ async function connectToServer(): Promise<void> {
 			process.exit(1);
 		}
 	});
-
+	controlSocket.on("ping", () => {
+		controlSocket?.pong();
+		lastPingTime = Date.now(); // Update last ping time
+	});
 	controlSocket.on("message", (message: Buffer) => handleServerData(message));
 	controlSocket.on("close", () => {
 		console.log("WebSocket connection closed. Reconnecting...");
@@ -153,6 +157,14 @@ async function connectToServer(): Promise<void> {
 	controlSocket.on("error", (err) => {
 		console.error("WebSocket connection error:", err);
 	});
+
+	// Check for ping timeout every second
+	setInterval(() => {
+		if (Date.now() - lastPingTime > 30000) { // 30 seconds
+			console.error("No ping received from server in 30 seconds. Exiting...");
+			process.exit(1);
+		}
+	}, 1000);
 }
 
 // 處理伺服器數據
