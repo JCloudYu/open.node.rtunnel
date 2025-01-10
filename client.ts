@@ -151,6 +151,7 @@ async function connectToServer(): Promise<void> {
 		console.log("WebSocket connection closed. Reconnecting...");
 		links.forEach((socket) => socket.end());
 		links.clear();
+		controlSocket = null; // Clear the controlSocket reference
 		setTimeout(connectToServer, 5000);
 	});
 
@@ -159,11 +160,12 @@ async function connectToServer(): Promise<void> {
 	});
 
 	// Check for ping timeout every second
-	setInterval(() => {
+	const pingTimeoutCheck = setInterval(() => {
 		if (Date.now() - lastPingTime > 30000) { // 30 seconds
 			console.error("No ping received from server in 30 seconds. Reconnecting...");
 			links.forEach((socket) => socket.end());
 			links.clear();
+			clearInterval(pingTimeoutCheck); // Clear the interval to prevent multiple reconnect attempts
 			connectToServer(); // Attempt to reconnect
 		}
 	}, 1000);
