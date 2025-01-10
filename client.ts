@@ -161,8 +161,10 @@ async function connectToServer(): Promise<void> {
 	// Check for ping timeout every second
 	setInterval(() => {
 		if (Date.now() - lastPingTime > 30000) { // 30 seconds
-			console.error("No ping received from server in 30 seconds. Exiting...");
-			process.exit(1);
+			console.error("No ping received from server in 30 seconds. Reconnecting...");
+			links.forEach((socket) => socket.end());
+			links.clear();
+			connectToServer(); // Attempt to reconnect
 		}
 	}, 1000);
 }
