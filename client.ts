@@ -67,7 +67,11 @@ if (isNaN(bindPort) || isNaN(localPort)) {
 
 let controlSocket: WebSocket | null = null;
 const links: Map<number, Socket> = new Map();
-let lastPingTime: number = Date.now(); // Track the last ping time
+
+
+
+// 開始執行
+connectToServer();
 
 // 封包處理：將類型、link_id 和內容編碼為二進制
 function encodeMessage(type: number, linkId: number, content: Buffer = Buffer.alloc(0)): Buffer {
@@ -84,7 +88,7 @@ function encodeMessage(type: number, linkId: number, content: Buffer = Buffer.al
 function decodeMessage(buffer: Buffer): { type: number; linkId: number; content: Buffer } {
 	const type = buffer.readUInt32BE(0);
 	const linkId = buffer.readUInt32BE(4);
-	const content = buffer.slice(8);
+	const content = buffer.subarray(8);
 
 	return { type, linkId, content };
 }
@@ -119,19 +123,17 @@ function bindServer(host: string, port: number): Promise<boolean> {
 
 // 修改連接處理
 async function connectToServer(): Promise<void> {
-	controlSocket = new WebSocket(`wss://${controlHost}:${controlPort}`, undefined, {
+	let lastPingTime = Date.now(); // Update last ping time
+	
+	controlSocket = (new WebSocket(`wss://${controlHost}:${controlPort}`, undefined, {
 		rejectUnauthorized: false,
-		requestCert: false,
+//		requestCert: false,
 		key: fs.readFileSync(CLIENT_KEY_PATH!),
-		cert: fs.readFileSync(CLIENT_CERT_PATH!),
-		headers: {
-			'Connection': 'Upgrade',
-			'Upgrade': 'websocket',
-		}
-	});
-
-	controlSocket.on("open", async () => {
+		cert: fs.readFileSync(CLIENT_CERT_PATH!)
+	}))
+	.on("open", async()=>{
 		console.log("WebSocket connection established over TLS.");
+		lastPingTime = Date.now();
 
 		// 連接成功後，嘗試綁定本地端口
 		const success = await bindServer(bindHost, bindPort);
@@ -141,34 +143,36 @@ async function connectToServer(): Promise<void> {
 			console.error(`Failed to bind to ${bindHost}:${bindPort}`);
 			process.exit(1);
 		}
-	});
-	controlSocket.on("ping", () => {
+	})
+	.on("ping", ()=>{
 		controlSocket?.pong();
 		lastPingTime = Date.now(); // Update last ping time
-	});
-	controlSocket.on("message", (message: Buffer) => handleServerData(message));
-	controlSocket.on("close", () => {
-		console.log("WebSocket connection closed. Reconnecting...");
-		links.forEach((socket) => socket.end());
-		links.clear();
-		controlSocket = null; // Clear the controlSocket reference
-		setTimeout(connectToServer, 5000);
-	});
-
-	controlSocket.on("error", (err) => {
+	})
+	.on("message", (message: Buffer)=>handleServerData(message))
+	.on("close", ()=>{
+		console.log("WebSocket connection closed. Closing all local connections and exiting...");
+		closeAllLocalConnections();
+	})
+	.on("error", (err)=>{
 		console.error("WebSocket connection error:", err);
+		closeAllLocalConnections();
 	});
 
 	// Check for ping timeout every second
-	const pingTimeoutCheck = setInterval(() => {
+	setInterval(()=>{
 		if (Date.now() - lastPingTime > 30000) { // 30 seconds
-			console.error("No ping received from server in 30 seconds. Reconnecting...");
-			links.forEach((socket) => socket.end());
-			links.clear();
-			clearInterval(pingTimeoutCheck); // Clear the interval to prevent multiple reconnect attempts
-			connectToServer(); // Attempt to reconnect
+			console.error("No ping received from server in 30 seconds. Closing all local connections and exiting...");
+			closeAllLocalConnections();
 		}
-	}, 1000);
+	}, 100);
+}
+
+// Close all local connections and exit
+function closeAllLocalConnections() {
+	links.forEach((socket)=>socket.end());
+	links.clear();
+	controlSocket?.close();
+	process.exit(1);
 }
 
 // 處理伺服器數據
@@ -213,6 +217,3 @@ function createLocalConnection(linkId: number): void {
 
 	links.set(linkId, localSocket);
 }
-
-// 開始執行
-connectToServer();
