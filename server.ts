@@ -56,7 +56,7 @@ function loadAuthorizedClients() {
 			const idx = t.indexOf(' ');
 			return ( idx === -1 ) ? {hash:t.toLowerCase(), name: ''} : {hash:t.substring(0, idx).toLowerCase(), name: t.substring(idx+1)};
 		}));
-		console.log(`Authorized clients updated:\n${authorizedClients.map(h=>`    ${h}`).join("\n")}`);
+		console.log(`Authorized clients updated:\n${authorizedClients.map(h=>`    ${h.hash} - ${h.name}`).join("\n")}`);
 	}
 	catch (err) {
 		if ( err ) {
