@@ -52,9 +52,9 @@ The `client.ts` script establishes a secure WebSocket connection to the server a
 3. Specify tunneling rules directly or via command line arguments:
    - Rule format: `<bind_host>:<bind_port>:<local_host>:<local_port>`
    - Example:
-     ```bash
-     node client.ts --ssl-key client-key.pem --ssl-crt client-cert.pem --host 127.0.0.1 --port 8000 127.0.0.1:8080:localhost:3000
-     ```
+    ```bash
+    bash client.sh tsx client.ts --ssl-key client-key.pem --ssl-crt client-cert.pem --host 127.0.0.1 --port 8000 127.0.0.1:8080:localhost:3000
+    ```
 
 ### Functionality
 - Establishes a WebSocket connection to the server.
@@ -104,5 +104,5 @@ To use `server.ts` as the root Certificate Authority (CA) for generating client 
 
 3. **Extract the public key from the client certificate and compute its SHA1 hash**
 	```bash
-	openssl x509 -in client.crt -pubkey -noout | openssl rsa -pubin -outform DER 2>/dev/null | sha1
+	openssl x509 -in client.crt -pubkey -noout | openssl rsa -pubin -outform DER 2>/dev/null | openssl dgst -sha1
 	```

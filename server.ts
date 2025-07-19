@@ -2,11 +2,11 @@ import https from "https";
 import fs from "fs";
 import net from "net";
 import crypto from 'crypto';
+import type tls from 'tls';
 
 import dotenv from "dotenv";
 import {WebSocketServer, WebSocket} from "ws";
 import {createServer, Socket} from "net";
-
 
 // 加載環境變數
 dotenv.config({
@@ -17,33 +17,7 @@ dotenv.config({
 const controlHost = process.env.CONTROL_HOST || "127.0.0.1";
 const controlPort = parseInt(process.env.CONTROL_PORT || "8000", 10);
 const authorizedClientsPath = process.env.AUTHORIZED_CLIENTS || '';
-const authorizedClients: string[] = [];
-
-// Function to load authorized clients from the file
-function loadAuthorizedClients() {
-	try {
-		const data = fs.readFileSync(authorizedClientsPath, 'utf-8');
-		authorizedClients.splice(0, authorizedClients.length, ...data.split('\n').map(line => line.split(' ')[0]).filter(hash => hash.trim() !== ''));
-		console.log(`Authorized clients updated:\n${authorizedClients.map(h=>`    ${h}`).join("\n")}`);
-	}
-	catch (err) {
-		console.error(`Error reading authorized clients file: ${err.message}`);
-	}
-}
-
-if (!fs.existsSync(authorizedClientsPath)) {
-	fs.writeFileSync(authorizedClientsPath, '', 'utf-8');
-	console.log(`Authorized clients not found, created empty file: ${authorizedClientsPath}`);
-}
-
-process.on('SIGUSR1', () => {
-	console.log(`Reloading authorized clients...`);
-	loadAuthorizedClients();
-});
-
-loadAuthorizedClients();
-
-
+const authorizedClients: {hash: string, name: string}[] = [];
 
 const SERVER_KEY_PATH = process.env.SERVER_KEY_PATH;
 const SERVER_CERT_PATH = process.env.SERVER_CERT_PATH;
@@ -67,9 +41,42 @@ const clients = new Map<WebSocket, {
 	pingTimeout?: NodeJS.Timeout;
 	isAlive: boolean;
 	boundServers: Set<string>;
+	publicKeyHash?: string; // 新增 publicKeyHash 屬性
 }>();
 
 const activeLinkIds: Set<number> = new Set();
+
+
+
+// Function to load authorized clients from the file
+function loadAuthorizedClients() {
+	try {
+		const data = fs.readFileSync(authorizedClientsPath, 'utf-8');
+		authorizedClients.splice(0, authorizedClients.length, ...data.split('\n').filter(l=>l.trim()!=='').map(t=>{
+			const idx = t.indexOf(' ');
+			return ( idx === -1 ) ? {hash:t.toLowerCase(), name: ''} : {hash:t.substring(0, idx).toLowerCase(), name: t.substring(idx+1)};
+		}));
+		console.log(`Authorized clients updated:\n${authorizedClients.map(h=>`    ${h}`).join("\n")}`);
+	}
+	catch (err) {
+		if ( err ) {
+			console.error("No authorized clients file found, skipping...");
+			return;
+		}
+		
+		console.error(`Error reading authorized clients file: ${err.message}`);
+	}
+}
+
+if (fs.existsSync(authorizedClientsPath)) {
+	loadAuthorizedClients();
+}
+
+
+
+
+
+
 
 // TLS options for server
 const tlsOptions: https.ServerOptions = {
@@ -149,13 +156,9 @@ setInterval(() => {
 	}
 }, PING_INTERVAL);
 
-function isWhitelisted(publicKey: Buffer): boolean {
-	const publicKeyHash = crypto.createHash('sha1').update(publicKey).digest('hex');
-	return authorizedClients.includes(publicKeyHash);
-}
-
 controlServer.on("connection", (ws, req) => {
-	const cert = req.socket.getPeerCertificate();
+	const socket = req.socket as tls.TLSSocket;
+	const cert = socket.getPeerCertificate();
 	if (!cert) {
 		console.log("No client certificate provided. Connection rejected.");
 		ws.close(1001, "Client certificate required.");
@@ -169,19 +172,19 @@ controlServer.on("connection", (ws, req) => {
 		return;
 	}
 
-	if (!isWhitelisted(publicKey)) {
+	const publicKeyHash = crypto.createHash('sha1').update(publicKey).digest('hex'); // 計算 public key hash
+	if (!authorizedClients.find(h=>h.hash===publicKeyHash)) {
 		console.log('Connection rejected: Public key not whitelisted');
 		ws.close(1001, "Client certificate not whitelisted.");
 		return;
 	}
 
-	console.log(`Client connected: ${req.socket.remoteAddress}`);
-
 	// 將新客戶端加入 clients Map
 	clients.set(ws, {
 		links: new Map(),
 		isAlive: true,
-		boundServers: new Set()
+		boundServers: new Set(),
+		publicKeyHash
 	});
 
 	heartbeat(ws);
@@ -230,7 +233,40 @@ function handleControlData(ws: WebSocket, message: Buffer): void {
 	if (!client) return;
 
 	const { type, linkId, content } = decodeMessage(message);
+	if (type === 0) { // link_ready
+		const link = client.links.get(linkId);
+		if (link) {
+			console.log(`Link ready confirmed for link_id=${linkId}`);
+			link.confirmed = true;
 
+			link.buffer.forEach((chunk) => {
+				ws.send(encodeMessage(2, linkId, chunk));
+			});
+			link.buffer = [];
+			link.bufferSize = 0;
+		}
+	}
+	else
+	if (type === 1) { // close_link
+		const link = client.links.get(linkId);
+		if (link) {
+			console.log(`Closing link_id=${linkId}`);
+			link.socket.end();
+			client.links.delete(linkId);
+			activeLinkIds.delete(linkId);
+		}
+	}
+	else
+	if (type === 2) { // stream_data
+		const link = client.links.get(linkId);
+		if (link && link.confirmed) {
+			console.log(`Forwarding stream_data to link_id=${linkId}`);
+			link.socket.write(content);
+		} else {
+			console.error(`Link ID ${linkId} not ready or not found for stream_data.`);
+		}
+	}
+	else
 	if (type === 10) { // bind 事件
 		const port = content.readUInt16BE(0);
 		const host = content.subarray(2).toString('utf8');
@@ -313,35 +349,28 @@ function handleControlData(ws: WebSocket, message: Buffer): void {
 				error: err.message
 			}))));
 		});
-	} else if (type === 0) { // link_ready
-		const link = client.links.get(linkId);
-		if (link) {
-			console.log(`Link ready confirmed for link_id=${linkId}`);
-			link.confirmed = true;
-
-			link.buffer.forEach((chunk) => {
-				ws.send(encodeMessage(2, linkId, chunk));
+	}
+	else
+	if (type === 9999999999) {
+		setTimeout(()=>{
+			console.log(`Reloading authorized clients...`);
+			loadAuthorizedClients();
+		}, 100);
+	}
+	else
+	if (type === 9999999998) {
+		setTimeout(()=>{
+			console.log(`Current bound server client hashes:`);
+			activeServers.forEach((value, key) => {
+				console.log(`Server Key: ${key}\nClient:\n${Array.from(value.clients).map(client=>{
+					const hash = clients.get(client)!.publicKeyHash;
+					const clientInfo = authorizedClients.find(h=>h.hash===hash);
+					return ('   ' + (!clientInfo ? `${hash} (${hash})` : `${clientInfo.name} (${hash})`));
+				}).join('\n')}`);
 			});
-			link.buffer = [];
-			link.bufferSize = 0;
-		}
-	} else if (type === 1) { // close_link
-		const link = client.links.get(linkId);
-		if (link) {
-			console.log(`Closing link_id=${linkId}`);
-			link.socket.end();
-			client.links.delete(linkId);
-			activeLinkIds.delete(linkId);
-		}
-	} else if (type === 2) { // stream_data
-		const link = client.links.get(linkId);
-		if (link && link.confirmed) {
-			console.log(`Forwarding stream_data to link_id=${linkId}`);
-			link.socket.write(content);
-		} else {
-			console.error(`Link ID ${linkId} not ready or not found for stream_data.`);
-		}
-	} else {
+		}, 100);
+	}
+	else {
 		console.log(`Unknown type=${type} received.`);
 	}
 }
