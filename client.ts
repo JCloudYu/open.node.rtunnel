@@ -55,7 +55,12 @@ function stripBracketsIfIPv6(host: string): string {
     return host;
 }
 
-function parseProxyRule(rule: string): { bindHost: string; bindPort: number; localHost: string; localPort: number } {
+function isIPv6Host(host: string): boolean {
+    const h = stripBracketsIfIPv6(host);
+    return h.includes(':');
+}
+
+function parseProxyRule(rule: string): { bindHost: string; bindPort: number; localHost: string; localPort: number; isBindIPv6: boolean; isLocalIPv6: boolean } {
     // Expected: <bind_host>:<bind_port>:<local_host>:<local_port>
     // where bind_host/local_host can be IPv6 wrapped with []
     // Strategy: parse from right to left, handling [] segments
@@ -101,10 +106,17 @@ function parseProxyRule(rule: string): { bindHost: string; bindPort: number; loc
     const bindHost = stripBracketsIfIPv6(rawBindHost);
     const localHost = stripBracketsIfIPv6(rawLocalHost);
 
-    return { bindHost, bindPort, localHost, localPort };
+    const isBindIPv6 = isIPv6Host(rawBindHost);
+    const isLocalIPv6 = isIPv6Host(rawLocalHost);
+
+    return { bindHost, bindPort, localHost, localPort, isBindIPv6, isLocalIPv6 };
 }
 
-const { bindHost, bindPort, localHost, localPort } = parseProxyRule(proxy_rule);
+const { bindHost, bindPort, localHost, localPort, isBindIPv6, isLocalIPv6 } = parseProxyRule(proxy_rule);
+
+function formatHostPort(host: string, port: number, isIPv6: boolean): string {
+    return isIPv6 ? `[${host}]:${port}` : `${host}:${port}`;
+}
 
 
 
@@ -182,9 +194,9 @@ async function connectToServer(): Promise<void> {
 		// 連接成功後，嘗試綁定本地端口
 		const success = await bindServer(bindHost, bindPort);
 		if (success) {
-			console.log(`Successfully bound to ${bindHost}:${bindPort}`);
+			console.log(`Successfully bound to ${formatHostPort(bindHost, bindPort, isBindIPv6)}`);
 		} else {
-			console.error(`Failed to bind to ${bindHost}:${bindPort}`);
+			console.error(`Failed to bind to ${formatHostPort(bindHost, bindPort, isBindIPv6)}`);
 			process.exit(1);
 		}
 	})
@@ -241,7 +253,7 @@ function handleServerData(message: Buffer): void {
 // 建立本地連線
 function createLocalConnection(linkId: number): void {
 	const localSocket = createConnection({ port: localPort, host: localHost }, () => {
-		console.log(`Local connection established for link_id=${linkId}`);
+		console.log(`Local connection established for link_id=${linkId} -> ${formatHostPort(localHost, localPort, isLocalIPv6)}`);
 		controlSocket?.send(encodeMessage(0, linkId)); // 回應 link_ready
 	});
 
