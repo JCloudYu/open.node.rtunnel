@@ -47,20 +47,64 @@ if ( !CLIENT_KEY_PATH || !CLIENT_CERT_PATH ) {
 
 
 
-// Parse proxy rule from command line argument
+// Parse proxy rule from command line argument (support IPv6 in [::] form)
 const [proxy_rule] = ARGV._;
-const [bindHost, bindPortStr, localHost, localPortStr] = proxy_rule.split(':');
-if (!bindHost || !bindPortStr || !localHost || !localPortStr) {
-	console.error("Invalid proxy rule format. Expected: <bind_host>:<bind_port>:<local_host>:<local_port>");
-	process.exit(1);
+
+function stripBracketsIfIPv6(host: string): string {
+    if (host.startsWith('[') && host.endsWith(']')) return host.slice(1, -1);
+    return host;
 }
 
-const bindPort = parseInt(bindPortStr, 10);
-const localPort = parseInt(localPortStr, 10);
-if (isNaN(bindPort) || isNaN(localPort)) {
-	console.error("Invalid port number.");
-	process.exit(1);
+function parseProxyRule(rule: string): { bindHost: string; bindPort: number; localHost: string; localPort: number } {
+    // Expected: <bind_host>:<bind_port>:<local_host>:<local_port>
+    // where bind_host/local_host can be IPv6 wrapped with []
+    // Strategy: parse from right to left, handling [] segments
+
+    const parts: string[] = [];
+    let i = rule.length - 1;
+    let segEnd = rule.length;
+    let need = 3; // we need to find 3 separators to get 4 segments
+
+    while (i >= 0 && need > 0) {
+        const ch = rule[i];
+        if (ch === ']') {
+            // Skip backwards to matching '['
+            const open = rule.lastIndexOf('[', i);
+            if (open === -1) break; // malformed, let it fail later
+            i = open - 1;
+            continue;
+        }
+        if (ch === ':') {
+            parts.unshift(rule.substring(i + 1, segEnd));
+            segEnd = i;
+            need--;
+        }
+        i--;
+    }
+    // push the remaining head as the first part
+    parts.unshift(rule.substring(0, segEnd));
+
+    if (parts.length !== 4 || parts.some(p => p.length === 0)) {
+        console.error("Invalid proxy rule format. Expected: <bind_host>:<bind_port>:<local_host>:<local_port>");
+        process.exit(1);
+    }
+
+    const [rawBindHost, bindPortStr, rawLocalHost, localPortStr] = parts;
+
+    const bindPort = parseInt(bindPortStr, 10);
+    const localPort = parseInt(localPortStr, 10);
+    if (isNaN(bindPort) || isNaN(localPort)) {
+        console.error("Invalid port number.");
+        process.exit(1);
+    }
+
+    const bindHost = stripBracketsIfIPv6(rawBindHost);
+    const localHost = stripBracketsIfIPv6(rawLocalHost);
+
+    return { bindHost, bindPort, localHost, localPort };
 }
+
+const { bindHost, bindPort, localHost, localPort } = parseProxyRule(proxy_rule);
 
 
 
